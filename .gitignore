@@ -1,0 +1,9 @@
+*.patch
+*.swp
+*.swo
+*~
+.goreleaser.yml
+tags
+dist/
+vendor/
+sqscat
