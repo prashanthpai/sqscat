@@ -16,7 +16,6 @@ import (
 const (
 	queueURL    = "https://sqs.us-east-1.amazonaws.com/xxxxxxxx/yyyyyyyyy"
 	concurrency = 10
-	outputFile  = "sqsPayloads.out"
 )
 
 var (
@@ -30,23 +29,16 @@ func main() {
 	}
 	sqsClient := sqs.NewFromConfig(awsCfg)
 
-	f, err := os.OpenFile(outputFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("os.OpenFile() failed: %v", err)
-	}
-	defer f.Close()
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	wg := &sync.WaitGroup{}
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go poll(ctx, sqsClient, f, wg)
+		go poll(ctx, sqsClient, os.Stdout, wg)
 	}
 
 	wg.Wait()
-	log.Printf("written to file: %s", outputFile)
 }
 
 func poll(ctx context.Context, sqsClient *sqs.Client, f *os.File, wg *sync.WaitGroup) {

@@ -1,4 +1,4 @@
-module github.com/ppai-plivo/sqs2file
+module github.com/ppai-plivo/sqscat
 
 go 1.17
 

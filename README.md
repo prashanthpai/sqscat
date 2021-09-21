@@ -1,3 +1,3 @@
-# sqs2file
+# sqscat
 
-Dump AWS SQS payloads to a file for inspection.
+Poll AWS SQS payloads for inspection.
