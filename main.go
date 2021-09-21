@@ -6,64 +6,88 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	flags "github.com/jessevdk/go-flags"
 )
 
 const (
-	queueURL    = "https://sqs.us-east-1.amazonaws.com/xxxxxxxx/yyyyyyyyy"
-	concurrency = 10
+	maxNumberOfMessages = 10
+	waitTimeSeconds     = 20
 )
 
-var (
-	outputDelimiter = []byte("\n")
-)
+type opts struct {
+	Concurrency int `short:"c" long:"concurrency" description:"Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs"`
+	Positional  struct {
+		QueueName string `positional-arg-name:"queue-name"`
+	} `positional-args:"true" required:"true"`
+}
 
 func main() {
+	opts := opts{}
+	if _, err := flags.Parse(&opts); err != nil {
+		if e, ok := err.(*flags.Error); ok {
+			if e.Type == flags.ErrHelp {
+				os.Exit(0)
+			} else {
+				os.Exit(1)
+			}
+		}
+	}
+
 	awsCfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatalf("config.LoadDefaultConfig() failed: %v", err)
 	}
+
 	sqsClient := sqs.NewFromConfig(awsCfg)
+
+	resp, err := sqsClient.GetQueueUrl(context.Background(), &sqs.GetQueueUrlInput{
+		QueueName: aws.String(opts.Positional.QueueName),
+	})
+	if err != nil {
+		log.Fatalf("sqsClient.GetQueueUrl(%s) failed: %v", opts.Positional.QueueName, err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	if opts.Concurrency <= 0 {
+		opts.Concurrency = 10 * runtime.NumCPU()
+	}
+
 	wg := &sync.WaitGroup{}
-	for i := 0; i < concurrency; i++ {
+	for i := 0; i < opts.Concurrency; i++ {
 		wg.Add(1)
-		go poll(ctx, sqsClient, os.Stdout, wg)
+		go poll(ctx, sqsClient, resp.QueueUrl, os.Stdout, wg)
 	}
 
 	wg.Wait()
 }
 
-func poll(ctx context.Context, sqsClient *sqs.Client, f *os.File, wg *sync.WaitGroup) {
+func poll(ctx context.Context, sqsClient *sqs.Client, queueURL *string, f *os.File, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("poller exited")
 			return
 		default:
 			resp, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-				QueueUrl:            aws.String(queueURL),
-				MaxNumberOfMessages: int32(10),
-				WaitTimeSeconds:     int32(20),
+				QueueUrl:            queueURL,
+				MaxNumberOfMessages: maxNumberOfMessages,
+				WaitTimeSeconds:     waitTimeSeconds,
 			})
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					log.Printf("poller exited")
 					return
 				}
 				log.Fatalf("sqsClient.ReceiveMessage() failed: %v", err)
 			}
-
-			log.Printf("received messages; count = %d\n", len(resp.Messages))
 
 			for _, msg := range resp.Messages {
 				// sequential is ok, poller is concurrent
@@ -72,6 +96,8 @@ func poll(ctx context.Context, sqsClient *sqs.Client, f *os.File, wg *sync.WaitG
 		}
 	}
 }
+
+var outputDelimiter = []byte("\n")
 
 func handleMessage(f *os.File, body string) {
 	if _, err := f.WriteString(body); err != nil {
