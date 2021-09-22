@@ -1,7 +1,6 @@
 # sqscat
 
 sqscat polls AWS SQS queue for messages and streams them to stdout.
-It does not delete the received messages.
 
 ### Install
 
@@ -15,18 +14,19 @@ configuration from environment variables, AWS shared configuration file
 (`~/.aws/config`), and AWS shared credentials file (`~/.aws/credentials`).
 
 ```sh
-$ ./sqscat --help
+$ sqscat --help
 Usage:
   sqscat [OPTIONS] queue-name
 
 Application Options:
   -c, --concurrency= Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs
+  -d, --delete       Delete received messages
 
 Help Options:
   -h, --help         Show this help message
 ```
 
-sqscat streams messages from SQS queue to STDOUT with newline as the delimiter.
+sqscat streams messages from SQS queue to stdout with newline as the delimiter.
 This can be piped further to other unix tools. For example:
 
 ```sh

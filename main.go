@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	flags "github.com/jessevdk/go-flags"
 )
 
@@ -21,7 +23,8 @@ const (
 )
 
 type opts struct {
-	Concurrency int `short:"c" long:"concurrency" description:"Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs"`
+	Concurrency int  `short:"c" long:"concurrency" description:"Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs"`
+	Delete      bool `short:"d" long:"delete" description:"Delete received messages"`
 	Positional  struct {
 		QueueName string `positional-arg-name:"queue-name"`
 	} `positional-args:"true" required:"true"`
@@ -63,13 +66,13 @@ func main() {
 	wg := &sync.WaitGroup{}
 	for i := 0; i < opts.Concurrency; i++ {
 		wg.Add(1)
-		go poll(ctx, sqsClient, resp.QueueUrl, os.Stdout, wg)
+		go poll(ctx, sqsClient, resp.QueueUrl, os.Stdout, opts.Delete, wg)
 	}
 
 	wg.Wait()
 }
 
-func poll(ctx context.Context, sqsClient *sqs.Client, queueURL *string, f *os.File, wg *sync.WaitGroup) {
+func poll(ctx context.Context, sqsClient *sqs.Client, queueURL *string, f *os.File, shouldDelete bool, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
@@ -93,6 +96,10 @@ func poll(ctx context.Context, sqsClient *sqs.Client, queueURL *string, f *os.Fi
 				// sequential is ok, poller is concurrent
 				handleMessage(f, *msg.Body)
 			}
+
+			if shouldDelete && len(resp.Messages) > 0 {
+				deleteMessages(context.Background(), sqsClient, queueURL, resp.Messages)
+			}
 		}
 	}
 }
@@ -105,5 +112,27 @@ func handleMessage(f *os.File, body string) {
 	}
 	if _, err := f.Write(outputDelimiter); err != nil {
 		log.Fatalf("Write() failed: %v", err)
+	}
+}
+
+func deleteMessages(ctx context.Context, sqsClient *sqs.Client, queueURL *string, messages []types.Message) {
+	var arr [maxNumberOfMessages]types.DeleteMessageBatchRequestEntry
+	var entries = arr[:0]
+	for i, msg := range messages {
+		entries = append(entries, types.DeleteMessageBatchRequestEntry{
+			Id:            aws.String(strconv.Itoa(i)),
+			ReceiptHandle: msg.ReceiptHandle,
+		})
+	}
+
+	resp, err := sqsClient.DeleteMessageBatch(context.Background(), &sqs.DeleteMessageBatchInput{
+		Entries:  entries,
+		QueueUrl: queueURL,
+	})
+	if err != nil {
+		log.Fatalf("sqsClient.DeleteMessageBatch() failed: %v", err)
+	}
+	for _, msg := range resp.Failed {
+		log.Fatalf("message delete failed: msg id = %s", *msg.Id)
 	}
 }
