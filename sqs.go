@@ -20,7 +20,7 @@ type sqsClient interface {
 	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
 }
 
-func initSqs(queueName string) (*sqs.Client, *string, error) {
+func initSqs(ctx context.Context, queueName string) (*sqs.Client, *string, error) {
 	awsCfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		return nil, nil, fmt.Errorf("config.LoadDefaultConfig() failed: %w", err)
@@ -28,7 +28,7 @@ func initSqs(queueName string) (*sqs.Client, *string, error) {
 
 	sqsClient := sqs.NewFromConfig(awsCfg)
 
-	resp, err := sqsClient.GetQueueUrl(context.Background(), &sqs.GetQueueUrlInput{
+	resp, err := sqsClient.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	})
 	if err != nil {

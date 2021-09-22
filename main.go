@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"time"
 
 	flags "github.com/jessevdk/go-flags"
 )
@@ -17,9 +18,13 @@ const (
 	maxNumberOfMessages = 10
 )
 
-type handlerFunc func(string) error
+var (
+	outputDelimiter = []byte("\n")
+	version         = "undefined"
+	commit          = "undefined"
+)
 
-var outputDelimiter = []byte("\n")
+type handlerFunc func(string) error
 
 func defaultHandler(body string) error {
 	if _, err := os.Stdout.WriteString(body); err != nil {
@@ -34,33 +39,52 @@ func defaultHandler(body string) error {
 }
 
 type opts struct {
+	Version     bool `short:"v" long:"version" description:"Print version and exit"`
 	Concurrency int  `short:"c" long:"concurrency" description:"Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs"`
 	Delete      bool `short:"d" long:"delete" description:"Delete received messages"`
 	NumMessages int  `short:"n" long:"num-messages" description:"Receive specified number of messages and exit; This limits concurrency to 1"`
+	Time        int  `short:"t" long:"timeout" description:"Exit after specified number of seconds"`
 	Positional  struct {
 		QueueName string `positional-arg-name:"queue-name"`
 	} `positional-args:"true" required:"true"`
 }
 
+func parseOpts(opts *opts) {
+	_, err := flags.NewParser(opts, flags.HelpFlag|flags.PassDoubleDash).Parse()
+	if opts.Version {
+		fmt.Println(version, commit)
+		os.Exit(0)
+	}
+	if err != nil {
+		if t, ok := err.(*flags.Error); ok && t.Type == flags.ErrHelp {
+			fmt.Fprintln(os.Stdout, err.Error())
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+}
+
 func main() {
 	opts := opts{}
-	if _, err := flags.Parse(&opts); err != nil {
-		if e, ok := err.(*flags.Error); ok {
-			if e.Type == flags.ErrHelp {
-				os.Exit(0)
-			} else {
-				os.Exit(1)
-			}
-		}
-	}
-
-	sqsClient, queueUrl, err := initSqs(opts.Positional.QueueName)
-	if err != nil {
-		log.Fatalf("initSqs() failed: %v", err)
-	}
+	parseOpts(&opts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	if opts.Time > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(opts.Time)*time.Second)
+		defer cancel()
+	}
+
+	sqsClient, queueUrl, err := initSqs(ctx, opts.Positional.QueueName)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		log.Fatalf("initSqs() failed: %v", err)
+	}
 
 	if opts.NumMessages > 0 {
 		// sync with limit
@@ -92,7 +116,7 @@ func poll(ctx context.Context, sqsClient sqsClient, queueURL *string, fn handler
 			return
 		default:
 			if _, err := receiveMessages(ctx, sqsClient, queueURL, maxNumberOfMessages, fn, shouldDelete); err != nil {
-				if errors.Is(err, context.Canceled) {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return
 				}
 				log.Fatalf("sqsClient.ReceiveMessage() failed: %v", err)
@@ -114,7 +138,7 @@ func pollWithLimit(ctx context.Context, sqsClient sqsClient, queueURL *string, l
 		default:
 			rcvd, err := receiveMessages(ctx, sqsClient, queueURL, batchSize, fn, shouldDelete)
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return nil
 				}
 				return err
