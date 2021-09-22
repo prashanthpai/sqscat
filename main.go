@@ -3,28 +3,40 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
-	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	flags "github.com/jessevdk/go-flags"
 )
 
 const (
 	maxNumberOfMessages = 10
-	waitTimeSeconds     = 20
 )
+
+type handlerFunc func(string) error
+
+var outputDelimiter = []byte("\n")
+
+func defaultHandler(body string) error {
+	if _, err := os.Stdout.WriteString(body); err != nil {
+		return fmt.Errorf("WriteString() failed: %w", err)
+	}
+
+	if _, err := os.Stdout.Write(outputDelimiter); err != nil {
+		return fmt.Errorf("Write() failed: %w", err)
+	}
+
+	return nil
+}
 
 type opts struct {
 	Concurrency int  `short:"c" long:"concurrency" description:"Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs"`
 	Delete      bool `short:"d" long:"delete" description:"Delete received messages"`
+	NumMessages int  `short:"n" long:"num-messages" description:"Receive specified number of messages and exit; This limits concurrency to 1"`
 	Positional  struct {
 		QueueName string `positional-arg-name:"queue-name"`
 	} `positional-args:"true" required:"true"`
@@ -42,22 +54,21 @@ func main() {
 		}
 	}
 
-	awsCfg, err := config.LoadDefaultConfig(context.Background())
+	sqsClient, queueUrl, err := initSqs(opts.Positional.QueueName)
 	if err != nil {
-		log.Fatalf("config.LoadDefaultConfig() failed: %v", err)
-	}
-
-	sqsClient := sqs.NewFromConfig(awsCfg)
-
-	resp, err := sqsClient.GetQueueUrl(context.Background(), &sqs.GetQueueUrlInput{
-		QueueName: aws.String(opts.Positional.QueueName),
-	})
-	if err != nil {
-		log.Fatalf("sqsClient.GetQueueUrl(%s) failed: %v", opts.Positional.QueueName, err)
+		log.Fatalf("initSqs() failed: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	if opts.NumMessages > 0 {
+		// sync with limit
+		if err := pollWithLimit(ctx, sqsClient, queueUrl, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
+			log.Fatalf("pollWithLimit() failed: %v", err)
+		}
+		return
+	}
 
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 10 * runtime.NumCPU()
@@ -66,13 +77,13 @@ func main() {
 	wg := &sync.WaitGroup{}
 	for i := 0; i < opts.Concurrency; i++ {
 		wg.Add(1)
-		go poll(ctx, sqsClient, resp.QueueUrl, os.Stdout, opts.Delete, wg)
+		go poll(ctx, sqsClient, queueUrl, defaultHandler, opts.Delete, wg)
 	}
 
 	wg.Wait()
 }
 
-func poll(ctx context.Context, sqsClient *sqs.Client, queueURL *string, f *os.File, shouldDelete bool, wg *sync.WaitGroup) {
+func poll(ctx context.Context, sqsClient sqsClient, queueURL *string, fn handlerFunc, shouldDelete bool, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
@@ -80,59 +91,37 @@ func poll(ctx context.Context, sqsClient *sqs.Client, queueURL *string, f *os.Fi
 		case <-ctx.Done():
 			return
 		default:
-			resp, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-				QueueUrl:            queueURL,
-				MaxNumberOfMessages: maxNumberOfMessages,
-				WaitTimeSeconds:     waitTimeSeconds,
-			})
-			if err != nil {
+			if _, err := receiveMessages(ctx, sqsClient, queueURL, maxNumberOfMessages, fn, shouldDelete); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
 				log.Fatalf("sqsClient.ReceiveMessage() failed: %v", err)
 			}
-
-			for _, msg := range resp.Messages {
-				// sequential is ok, poller is concurrent
-				handleMessage(f, *msg.Body)
-			}
-
-			if shouldDelete && len(resp.Messages) > 0 {
-				deleteMessages(context.Background(), sqsClient, queueURL, resp.Messages)
-			}
 		}
 	}
 }
 
-var outputDelimiter = []byte("\n")
+func pollWithLimit(ctx context.Context, sqsClient sqsClient, queueURL *string, limit int, fn handlerFunc, shouldDelete bool) error {
+	for limit > 0 {
+		batchSize := maxNumberOfMessages
+		if limit < batchSize {
+			batchSize = limit
+		}
 
-func handleMessage(f *os.File, body string) {
-	if _, err := f.WriteString(body); err != nil {
-		log.Fatalf("WriteString() failed: %v", err)
-	}
-	if _, err := f.Write(outputDelimiter); err != nil {
-		log.Fatalf("Write() failed: %v", err)
-	}
-}
-
-func deleteMessages(ctx context.Context, sqsClient *sqs.Client, queueURL *string, messages []types.Message) {
-	var arr [maxNumberOfMessages]types.DeleteMessageBatchRequestEntry
-	var entries = arr[:0]
-	for i, msg := range messages {
-		entries = append(entries, types.DeleteMessageBatchRequestEntry{
-			Id:            aws.String(strconv.Itoa(i)),
-			ReceiptHandle: msg.ReceiptHandle,
-		})
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			rcvd, err := receiveMessages(ctx, sqsClient, queueURL, batchSize, fn, shouldDelete)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				return err
+			}
+			limit -= rcvd
+		}
 	}
 
-	resp, err := sqsClient.DeleteMessageBatch(context.Background(), &sqs.DeleteMessageBatchInput{
-		Entries:  entries,
-		QueueUrl: queueURL,
-	})
-	if err != nil {
-		log.Fatalf("sqsClient.DeleteMessageBatch() failed: %v", err)
-	}
-	for _, msg := range resp.Failed {
-		log.Fatalf("message delete failed: msg id = %s", *msg.Id)
-	}
+	return nil
 }

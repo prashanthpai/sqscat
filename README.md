@@ -19,11 +19,13 @@ Usage:
   sqscat [OPTIONS] queue-name
 
 Application Options:
-  -c, --concurrency= Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs
-  -d, --delete       Delete received messages
+  -c, --concurrency=  Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs
+  -d, --delete        Delete received messages
+  -n, --num-messages= Receive specified number of messages and exit; This limits concurrency to 1
 
 Help Options:
-  -h, --help         Show this help message
+  -h, --help          Show this help message
+
 ```
 
 sqscat streams messages from SQS queue to stdout with newline as the delimiter.
