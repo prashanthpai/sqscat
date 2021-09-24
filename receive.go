@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
-	"sync"
 )
 
 const (
@@ -31,45 +29,61 @@ func defaultHandler(body string) error {
 	return nil
 }
 
-func poll(ctx context.Context, sqsClient sqsClient, queueURL *string, fn handlerFunc, shouldDelete bool, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func poll(ctx context.Context, sqsClient sqsClient, fn handlerFunc, shouldDelete bool) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			if _, err := receiveMessages(ctx, sqsClient, queueURL, maxNumberOfMessages, fn, shouldDelete); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return
-				}
-				log.Fatalf("sqsClient.ReceiveMessage() failed: %v", err)
+		_, err := pollCommon(ctx, sqsClient, fn, maxNumberOfMessages, shouldDelete)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
 			}
+			return err
 		}
 	}
 }
 
-func pollWithLimit(ctx context.Context, sqsClient sqsClient, queueURL *string, limit int, fn handlerFunc, shouldDelete bool) error {
+func pollWithLimit(ctx context.Context, sqsClient sqsClient, limit int, fn handlerFunc, shouldDelete bool) error {
 	for limit > 0 {
 		batchSize := maxNumberOfMessages
 		if limit < batchSize {
 			batchSize = limit
 		}
 
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			rcvd, err := receiveMessages(ctx, sqsClient, queueURL, batchSize, fn, shouldDelete)
-			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return nil
-				}
-				return err
+		count, err := pollCommon(ctx, sqsClient, fn, batchSize, shouldDelete)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
 			}
-			limit -= rcvd
+			return err
 		}
+
+		limit -= count
 	}
 
 	return nil
+}
+
+func pollCommon(ctx context.Context, sqsClient sqsClient, fn handlerFunc, batchSize int, shouldDelete bool) (int, error) {
+	select {
+	case <-ctx.Done():
+		return 0, nil
+	default:
+		messages, err := sqsClient.ReceiveMessages(ctx, batchSize)
+		if err != nil {
+			return 0, err
+		}
+
+		for _, msg := range messages {
+			if err := fn(*msg.Body); err != nil {
+				return len(messages), err
+			}
+		}
+
+		if shouldDelete {
+			if err := sqsClient.DeleteMessages(context.Background(), messages); err != nil {
+				return len(messages), err
+			}
+		}
+
+		return len(messages), nil
+	}
 }

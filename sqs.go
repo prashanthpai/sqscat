@@ -16,15 +16,20 @@ const (
 )
 
 type sqsClient interface {
-	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
-	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
-	SendMessage(context.Context, *sqs.SendMessageInput, ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
+	ReceiveMessages(ctx context.Context, batchSize int) ([]types.Message, error)
+	DeleteMessages(ctx context.Context, messages []types.Message) error
+	SendMessage(ctx context.Context, body *string) error
 }
 
-func initSqs(ctx context.Context, queueName string) (*sqs.Client, *string, error) {
+type sqsQueueClient struct {
+	client   *sqs.Client
+	queueURL *string
+}
+
+func initSqs(ctx context.Context, queueName string) (*sqsQueueClient, error) {
 	awsCfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		return nil, nil, fmt.Errorf("config.LoadDefaultConfig() failed: %w", err)
+		return nil, fmt.Errorf("config.LoadDefaultConfig() failed: %w", err)
 	}
 
 	sqsClient := sqs.NewFromConfig(awsCfg)
@@ -33,39 +38,33 @@ func initSqs(ctx context.Context, queueName string) (*sqs.Client, *string, error
 		QueueName: aws.String(queueName),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("sqsClient.GetQueueUrl(%s) failed: %w", queueName, err)
+		return nil, fmt.Errorf("sqsClient.GetQueueUrl(%s) failed: %w", queueName, err)
 	}
 
-	return sqsClient, resp.QueueUrl, nil
+	return &sqsQueueClient{
+		sqsClient,
+		resp.QueueUrl,
+	}, nil
 }
 
-func receiveMessages(ctx context.Context, sqsClient sqsClient, queueURL *string, batchSize int, fn handlerFunc, shouldDelete bool) (int, error) {
-	resp, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:            queueURL,
+func (q *sqsQueueClient) ReceiveMessages(ctx context.Context, batchSize int) ([]types.Message, error) {
+	resp, err := q.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            q.queueURL,
 		MaxNumberOfMessages: int32(batchSize),
 		WaitTimeSeconds:     waitTimeSeconds,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("sqsClient.ReceiveMessage() failed: %w", err)
-	}
-	rcvd := len(resp.Messages)
-
-	for _, msg := range resp.Messages {
-		if err := fn(*msg.Body); err != nil {
-			return rcvd, err
-		}
+		return nil, fmt.Errorf("sqsClient.ReceiveMessage() failed: %w", err)
 	}
 
-	if shouldDelete && len(resp.Messages) > 0 {
-		if err := deleteMessages(context.Background(), sqsClient, queueURL, resp.Messages); err != nil {
-			return rcvd, err
-		}
-	}
-
-	return rcvd, nil
+	return resp.Messages, nil
 }
 
-func deleteMessages(ctx context.Context, sqsClient sqsClient, queueURL *string, messages []types.Message) error {
+func (q *sqsQueueClient) DeleteMessages(ctx context.Context, messages []types.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
 	var arr [maxNumberOfMessages]types.DeleteMessageBatchRequestEntry
 	var entries = arr[:0]
 	for i, msg := range messages {
@@ -75,9 +74,9 @@ func deleteMessages(ctx context.Context, sqsClient sqsClient, queueURL *string, 
 		})
 	}
 
-	resp, err := sqsClient.DeleteMessageBatch(context.Background(), &sqs.DeleteMessageBatchInput{
+	resp, err := q.client.DeleteMessageBatch(context.Background(), &sqs.DeleteMessageBatchInput{
 		Entries:  entries,
-		QueueUrl: queueURL,
+		QueueUrl: q.queueURL,
 	})
 	if err != nil {
 		return fmt.Errorf("sqsClient.DeleteMessageBatch() failed: %w", err)
@@ -89,11 +88,11 @@ func deleteMessages(ctx context.Context, sqsClient sqsClient, queueURL *string, 
 	return nil
 }
 
-func sendMessage(ctx context.Context, sqsClient sqsClient, queueURL *string, body *string) error {
-	_, err := sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
-		QueueUrl:    queueURL,
+func (q *sqsQueueClient) SendMessage(ctx context.Context, body *string) error {
+	_, err := q.client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    q.queueURL,
 		MessageBody: body,
-		// TODO: DelaySeconds? is it useful to make that configurable
+		// TODO: DelaySeconds?
 	})
 	if err != nil {
 		return fmt.Errorf("sqsClient.SendMessage() failed: %w", err)

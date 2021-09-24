@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sync"
 	"time"
 
 	flags "github.com/jessevdk/go-flags"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -46,25 +46,19 @@ func parseOpts(opts *opts) {
 	}
 }
 
-func main() {
-	opts := opts{}
-	parseOpts(&opts)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
+func run(ctx context.Context, opts opts) error {
 	if opts.Time > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(opts.Time)*time.Second)
 		defer cancel()
 	}
 
-	sqsClient, queueURL, err := initSqs(ctx, opts.Positional.QueueName)
+	sqsClient, err := initSqs(ctx, opts.Positional.QueueName)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return
+			return nil
 		}
-		log.Fatalf("initSqs() failed: %v", err)
+		return err
 	}
 
 	sendMode := isSendMode()
@@ -72,31 +66,50 @@ func main() {
 	if opts.NumMessages > 0 {
 		if sendMode {
 			fn := stdinNextFunc()
-			if err := dispatchWithLimit(ctx, sqsClient, queueURL, fn, opts.NumMessages); err != nil {
-				log.Fatalf("dispatchWithLimit() failed: %v", err)
+			if err := dispatchWithLimit(ctx, sqsClient, fn, opts.NumMessages); err != nil {
+				return err
 			}
 		} else {
-			if err := pollWithLimit(ctx, sqsClient, queueURL, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
-				log.Fatalf("pollWithLimit() failed: %v", err)
+			if err := pollWithLimit(ctx, sqsClient, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
+				return err
 			}
 		}
-		return
+		return nil
 	}
 
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 10 * runtime.NumCPU()
 	}
 
-	wg := &sync.WaitGroup{}
-	for i := 0; i < opts.Concurrency; i++ {
-		wg.Add(1)
-		if sendMode {
-			fn := stdinNextFunc()
-			go dispatch(ctx, sqsClient, queueURL, fn, wg)
-		} else {
-			go poll(ctx, sqsClient, queueURL, defaultHandler, opts.Delete, wg)
+	g, ctx := errgroup.WithContext(ctx)
+
+	if sendMode {
+		fn := stdinNextFunc()
+		for i := 0; i < opts.Concurrency; i++ {
+			g.Go(func() error {
+				return dispatch(ctx, sqsClient, fn)
+			})
+		}
+	} else {
+		fn := defaultHandler
+		for i := 0; i < opts.Concurrency; i++ {
+			g.Go(func() error {
+				return poll(ctx, sqsClient, fn, opts.Delete)
+			})
 		}
 	}
 
-	wg.Wait()
+	return g.Wait()
+}
+
+func main() {
+	opts := opts{}
+	parseOpts(&opts)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := run(ctx, opts); err != nil {
+		log.Fatalf("run() failed: %v", err)
+	}
 }

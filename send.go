@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 	"os"
-	"sync"
 )
 
 func isSendMode() bool {
@@ -37,50 +35,41 @@ func stdinNextFunc() nextFunc {
 	}
 }
 
-func dispatch(ctx context.Context, sqsClient sqsClient, queueURL *string, next nextFunc, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func dispatch(ctx context.Context, sqsClient sqsClient, next nextFunc) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			body, err := next()
-			if err != nil {
-				if err == io.EOF {
-					return
-				}
-				log.Fatalf("stdin: %v", err)
+		if err := dispatchCommon(ctx, sqsClient, next); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
+				return nil
 			}
-			if err := sendMessage(ctx, sqsClient, queueURL, &body); err != nil {
-				log.Fatalf("sendMessage() failed: %v", err)
-			}
+			return err
 		}
 	}
 }
 
-func dispatchWithLimit(ctx context.Context, sqsClient sqsClient, queueURL *string, next nextFunc, limit int) error {
+func dispatchWithLimit(ctx context.Context, sqsClient sqsClient, next nextFunc, limit int) error {
 	for limit > 0 {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			body, err := next()
-			if err != nil {
-				if err == io.EOF {
-					return nil
-				}
-				return err
+		if err := dispatchCommon(ctx, sqsClient, next); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
+				return nil
 			}
-			if err := sendMessage(ctx, sqsClient, queueURL, &body); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return nil
-				}
-				return err
-			}
-			limit--
+			return err
 		}
+		limit--
 	}
 
 	return nil
+}
+
+func dispatchCommon(ctx context.Context, sqsClient sqsClient, next nextFunc) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+		body, err := next()
+		if err != nil {
+			return err
+		}
+
+		return sqsClient.SendMessage(ctx, &body)
+	}
 }
