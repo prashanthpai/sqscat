@@ -28,11 +28,12 @@ func stdinNextFunc() nextFunc {
 		for scanner.Scan() {
 			return scanner.Text(), nil
 		}
+
 		if err := scanner.Err(); err != nil {
 			return "", err
-		} else {
-			return "", io.EOF
 		}
+
+		return "", io.EOF
 	}
 }
 

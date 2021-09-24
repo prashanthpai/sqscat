@@ -59,7 +59,7 @@ func main() {
 		defer cancel()
 	}
 
-	sqsClient, queueUrl, err := initSqs(ctx, opts.Positional.QueueName)
+	sqsClient, queueURL, err := initSqs(ctx, opts.Positional.QueueName)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -72,11 +72,11 @@ func main() {
 	if opts.NumMessages > 0 {
 		if sendMode {
 			fn := stdinNextFunc()
-			if err := dispatchWithLimit(ctx, sqsClient, queueUrl, fn, opts.NumMessages); err != nil {
+			if err := dispatchWithLimit(ctx, sqsClient, queueURL, fn, opts.NumMessages); err != nil {
 				log.Fatalf("dispatchWithLimit() failed: %v", err)
 			}
 		} else {
-			if err := pollWithLimit(ctx, sqsClient, queueUrl, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
+			if err := pollWithLimit(ctx, sqsClient, queueURL, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
 				log.Fatalf("pollWithLimit() failed: %v", err)
 			}
 		}
@@ -92,9 +92,9 @@ func main() {
 		wg.Add(1)
 		if sendMode {
 			fn := stdinNextFunc()
-			go dispatch(ctx, sqsClient, queueUrl, fn, wg)
+			go dispatch(ctx, sqsClient, queueURL, fn, wg)
 		} else {
-			go poll(ctx, sqsClient, queueUrl, defaultHandler, opts.Delete, wg)
+			go poll(ctx, sqsClient, queueURL, defaultHandler, opts.Delete, wg)
 		}
 	}
 
