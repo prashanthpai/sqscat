@@ -21,9 +21,9 @@ var (
 
 type opts struct {
 	Version     bool `short:"v" long:"version" description:"Print version and exit"`
-	Concurrency int  `short:"c" long:"concurrency" description:"Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs"`
+	Concurrency int  `short:"c" long:"concurrency" description:"Number of concurrent SQS receivers/senders; Defaults to 10 x Num. of CPUs"`
 	Delete      bool `short:"d" long:"delete" description:"Delete received messages"`
-	NumMessages int  `short:"n" long:"num-messages" description:"Receive specified number of messages and exit; This limits concurrency to 1"`
+	NumMessages int  `short:"n" long:"num-messages" description:"Receive/send specified number of messages and exit; This limits concurrency to 1"`
 	Time        int  `short:"t" long:"timeout" description:"Exit after specified number of seconds"`
 	Positional  struct {
 		QueueName string `positional-arg-name:"queue-name"`

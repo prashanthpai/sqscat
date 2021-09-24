@@ -1,13 +1,16 @@
 # sqscat
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/ppai-plivo/sqscat)](https://goreportcard.com/report/github.com/ppai-plivo/sqscat)
+[![MIT license](https://img.shields.io/badge/license-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
+
 sqscat is "netcat for SQS". You can use sqscat to receive from and send
-messages to SQS queue. sqscat uses newline as a delimiter between messages.
+messages to SQS queue. sqscat uses newline as the delimiter between messages.
 
 sqscat automatically detects and selects its mode (receive/send) depending
 on the terminal or pipe type:
 
-* If data is being piped into sqscat (stdin), it will send messages to SQS.
-* If data is being piped from sqscat (stdout) it will receive messages from SQS.
+* If data is being piped into sqscat (stdin), it sends messages to SQS.
+* If data is being piped from sqscat (stdout), it receives messages from SQS.
 
 sqscat is inspired by [kafkacat](https://github.com/edenhill/kafkacat).
 
@@ -29,9 +32,9 @@ Usage:
 
 Application Options:
   -v, --version       Print version and exit
-  -c, --concurrency=  Number of concurrent SQS pollers; Defaults to 10 x Num. of CPUs
+  -c, --concurrency=  Number of concurrent SQS receivers/senders; Defaults to 10 x Num. of CPUs
   -d, --delete        Delete received messages
-  -n, --num-messages= Receive specified number of messages and exit; This limits concurrency to 1
+  -n, --num-messages= Receive/send specified number of messages and exit; This limits concurrency to 1
   -t, --timeout=      Exit after specified number of seconds
 
 Help Options:
@@ -69,7 +72,7 @@ $ sqscat -d my-sqs-queue
 **Send mode:**
 
 Parse json and keep sending messages to the queue. sqscat will exit after the
-input pipe has been closed.
+input pipe has been closed (EOF).
 
 ```sh
 $ cat employees.json | jq --unbuffered '.employee.email' | ./sqscat dev-ppai-temp
