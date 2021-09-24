@@ -18,6 +18,7 @@ const (
 type sqsClient interface {
 	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
 	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+	SendMessage(context.Context, *sqs.SendMessageInput, ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
 }
 
 func initSqs(ctx context.Context, queueName string) (*sqs.Client, *string, error) {
@@ -83,6 +84,19 @@ func deleteMessages(ctx context.Context, sqsClient sqsClient, queueURL *string, 
 	}
 	for _, msg := range resp.Failed {
 		return fmt.Errorf("sqsClient.DeleteMessageBatch() failed: %v", *msg.Message)
+	}
+
+	return nil
+}
+
+func sendMessage(ctx context.Context, sqsClient sqsClient, queueURL *string, body *string) error {
+	_, err := sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    queueURL,
+		MessageBody: body,
+		// TODO: DelaySeconds? is it useful to make that configurable
+	})
+	if err != nil {
+		return fmt.Errorf("sqsClient.SendMessage() failed: %w", err)
 	}
 
 	return nil

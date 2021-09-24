@@ -1,9 +1,15 @@
 # sqscat
 
-sqscat polls AWS SQS queue for messages and streams them to stdout with
-newline as the delimiter. The output can be piped further to other Unix tools.
+sqscat is "netcat for SQS". You can use sqscat to receive from and send
+messages to SQS queue. sqscat uses newline as a delimiter between messages.
 
-Inspired by [kafkacat](https://github.com/edenhill/kafkacat).
+sqscat automatically detects and selects its mode (receive/send) depending
+on the terminal or pipe type:
+
+* If data is being piped into sqscat (stdin), it will send messages to SQS.
+* If data is being piped from sqscat (stdout) it will receive messages from SQS.
+
+sqscat is inspired by [kafkacat](https://github.com/edenhill/kafkacat).
 
 ### Install
 
@@ -34,6 +40,8 @@ Help Options:
 
 #### Examples
 
+**Receive mode:**
+
 Keep reading json payloads from queue and extract individual fields using [jq](https://stedolan.github.io/jq/):
 
 ```sh
@@ -58,6 +66,17 @@ Delete received messages after they have been printed to stdout:
 $ sqscat -d my-sqs-queue
 ```
 
-### TODO
+**Send mode:**
 
-1. Add producer mode i.e read from stdin and send to SQS.
+Parse json and keep sending messages to the queue. sqscat will exit after the
+input pipe has been closed.
+
+```sh
+$ cat employees.json | jq --unbuffered '.employee.email' | ./sqscat dev-ppai-temp
+```
+
+Send 25 messages to the queue and exit:
+
+```sh
+$ cat employees.json | jq --unbuffered '.employee.email' | sqscat -n 25 my-sqs-queue
+```

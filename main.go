@@ -14,29 +14,10 @@ import (
 	flags "github.com/jessevdk/go-flags"
 )
 
-const (
-	maxNumberOfMessages = 10
-)
-
 var (
-	outputDelimiter = []byte("\n")
-	version         = "undefined"
-	commit          = "undefined"
+	version = "undefined"
+	commit  = "undefined"
 )
-
-type handlerFunc func(string) error
-
-func defaultHandler(body string) error {
-	if _, err := os.Stdout.WriteString(body); err != nil {
-		return fmt.Errorf("WriteString() failed: %w", err)
-	}
-
-	if _, err := os.Stdout.Write(outputDelimiter); err != nil {
-		return fmt.Errorf("Write() failed: %w", err)
-	}
-
-	return nil
-}
 
 type opts struct {
 	Version     bool `short:"v" long:"version" description:"Print version and exit"`
@@ -86,10 +67,18 @@ func main() {
 		log.Fatalf("initSqs() failed: %v", err)
 	}
 
+	sendMode := isSendMode()
+
 	if opts.NumMessages > 0 {
-		// sync with limit
-		if err := pollWithLimit(ctx, sqsClient, queueUrl, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
-			log.Fatalf("pollWithLimit() failed: %v", err)
+		if sendMode {
+			fn := stdinNextFunc()
+			if err := dispatchWithLimit(ctx, sqsClient, queueUrl, fn, opts.NumMessages); err != nil {
+				log.Fatalf("dispatchWithLimit() failed: %v", err)
+			}
+		} else {
+			if err := pollWithLimit(ctx, sqsClient, queueUrl, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
+				log.Fatalf("pollWithLimit() failed: %v", err)
+			}
 		}
 		return
 	}
@@ -101,51 +90,13 @@ func main() {
 	wg := &sync.WaitGroup{}
 	for i := 0; i < opts.Concurrency; i++ {
 		wg.Add(1)
-		go poll(ctx, sqsClient, queueUrl, defaultHandler, opts.Delete, wg)
+		if sendMode {
+			fn := stdinNextFunc()
+			go dispatch(ctx, sqsClient, queueUrl, fn, wg)
+		} else {
+			go poll(ctx, sqsClient, queueUrl, defaultHandler, opts.Delete, wg)
+		}
 	}
 
 	wg.Wait()
-}
-
-func poll(ctx context.Context, sqsClient sqsClient, queueURL *string, fn handlerFunc, shouldDelete bool, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			if _, err := receiveMessages(ctx, sqsClient, queueURL, maxNumberOfMessages, fn, shouldDelete); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return
-				}
-				log.Fatalf("sqsClient.ReceiveMessage() failed: %v", err)
-			}
-		}
-	}
-}
-
-func pollWithLimit(ctx context.Context, sqsClient sqsClient, queueURL *string, limit int, fn handlerFunc, shouldDelete bool) error {
-	for limit > 0 {
-		batchSize := maxNumberOfMessages
-		if limit < batchSize {
-			batchSize = limit
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			rcvd, err := receiveMessages(ctx, sqsClient, queueURL, batchSize, fn, shouldDelete)
-			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return nil
-				}
-				return err
-			}
-			limit -= rcvd
-		}
-	}
-
-	return nil
 }
