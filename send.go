@@ -17,9 +17,9 @@ func isSendMode() bool {
 	return (fi.Mode() & os.ModeCharDevice) == 0
 }
 
-type nextFunc func() (string, error)
+type inFunc func() (string, error)
 
-func stdinNextFunc() nextFunc {
+func stdinNextFunc() inFunc {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	return func() (string, error) {
@@ -35,23 +35,25 @@ func stdinNextFunc() nextFunc {
 	}
 }
 
-func dispatch(ctx context.Context, sqsClient sqsClient, next nextFunc) error {
+func dispatch(ctx context.Context, sqsClient sqsClient, next inFunc) error {
 	for {
 		if err := dispatchCommon(ctx, sqsClient, next); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
 				return nil
 			}
+
 			return err
 		}
 	}
 }
 
-func dispatchWithLimit(ctx context.Context, sqsClient sqsClient, next nextFunc, limit int) error {
+func dispatchWithLimit(ctx context.Context, sqsClient sqsClient, next inFunc, limit int) error {
 	for limit > 0 {
 		if err := dispatchCommon(ctx, sqsClient, next); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
 				return nil
 			}
+
 			return err
 		}
 		limit--
@@ -60,7 +62,7 @@ func dispatchWithLimit(ctx context.Context, sqsClient sqsClient, next nextFunc, 
 	return nil
 }
 
-func dispatchCommon(ctx context.Context, sqsClient sqsClient, next nextFunc) error {
+func dispatchCommon(ctx context.Context, sqsClient sqsClient, next inFunc) error {
 	select {
 	case <-ctx.Done():
 		return nil

@@ -30,6 +30,18 @@ type opts struct {
 	} `positional-args:"true" required:"true"`
 }
 
+func main() {
+	opts := opts{}
+	parseOpts(&opts)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := run(ctx, opts); err != nil {
+		log.Fatalf("run() failed: %v", err)
+	}
+}
+
 func parseOpts(opts *opts) {
 	_, err := flags.NewParser(opts, flags.HelpFlag|flags.PassDoubleDash).Parse()
 	if opts.Version {
@@ -58,23 +70,25 @@ func run(ctx context.Context, opts opts) error {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil
 		}
+
 		return err
 	}
 
+	inFn := stdinNextFunc()
+	outFn := defaultHandler
+
+	return start(ctx, opts, sqsClient, inFn, outFn)
+}
+
+func start(ctx context.Context, opts opts, sqsClient sqsClient, inFn inFunc, outFn outFunc) error {
 	sendMode := isSendMode()
 
 	if opts.NumMessages > 0 {
 		if sendMode {
-			fn := stdinNextFunc()
-			if err := dispatchWithLimit(ctx, sqsClient, fn, opts.NumMessages); err != nil {
-				return err
-			}
+			return dispatchWithLimit(ctx, sqsClient, inFn, opts.NumMessages)
 		} else {
-			if err := pollWithLimit(ctx, sqsClient, opts.NumMessages, defaultHandler, opts.Delete); err != nil {
-				return err
-			}
+			return pollWithLimit(ctx, sqsClient, outFn, opts.NumMessages, opts.Delete)
 		}
-		return nil
 	}
 
 	if opts.Concurrency <= 0 {
@@ -84,32 +98,18 @@ func run(ctx context.Context, opts opts) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	if sendMode {
-		fn := stdinNextFunc()
 		for i := 0; i < opts.Concurrency; i++ {
 			g.Go(func() error {
-				return dispatch(ctx, sqsClient, fn)
+				return dispatch(ctx, sqsClient, inFn)
 			})
 		}
 	} else {
-		fn := defaultHandler
 		for i := 0; i < opts.Concurrency; i++ {
 			g.Go(func() error {
-				return poll(ctx, sqsClient, fn, opts.Delete)
+				return poll(ctx, sqsClient, outFn, opts.Delete)
 			})
 		}
 	}
 
 	return g.Wait()
-}
-
-func main() {
-	opts := opts{}
-	parseOpts(&opts)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	if err := run(ctx, opts); err != nil {
-		log.Fatalf("run() failed: %v", err)
-	}
 }

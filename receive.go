@@ -15,7 +15,7 @@ var (
 	outputDelimiter = []byte("\n")
 )
 
-type handlerFunc func(string) error
+type outFunc func(string) error
 
 func defaultHandler(body string) error {
 	if _, err := os.Stdout.WriteString(body); err != nil {
@@ -29,19 +29,20 @@ func defaultHandler(body string) error {
 	return nil
 }
 
-func poll(ctx context.Context, sqsClient sqsClient, fn handlerFunc, shouldDelete bool) error {
+func poll(ctx context.Context, sqsClient sqsClient, fn outFunc, shouldDelete bool) error {
 	for {
 		_, err := pollCommon(ctx, sqsClient, fn, maxNumberOfMessages, shouldDelete)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil
 			}
+
 			return err
 		}
 	}
 }
 
-func pollWithLimit(ctx context.Context, sqsClient sqsClient, limit int, fn handlerFunc, shouldDelete bool) error {
+func pollWithLimit(ctx context.Context, sqsClient sqsClient, fn outFunc, limit int, shouldDelete bool) error {
 	for limit > 0 {
 		batchSize := maxNumberOfMessages
 		if limit < batchSize {
@@ -53,6 +54,7 @@ func pollWithLimit(ctx context.Context, sqsClient sqsClient, limit int, fn handl
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil
 			}
+
 			return err
 		}
 
@@ -62,7 +64,7 @@ func pollWithLimit(ctx context.Context, sqsClient sqsClient, limit int, fn handl
 	return nil
 }
 
-func pollCommon(ctx context.Context, sqsClient sqsClient, fn handlerFunc, batchSize int, shouldDelete bool) (int, error) {
+func pollCommon(ctx context.Context, sqsClient sqsClient, fn outFunc, batchSize int, shouldDelete bool) (int, error) {
 	select {
 	case <-ctx.Done():
 		return 0, nil
