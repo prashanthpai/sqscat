@@ -1,6 +1,6 @@
 # sqscat
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/ppai-plivo/sqscat)](https://goreportcard.com/report/github.com/ppai-plivo/sqscat)
+[![Go Report Card](https://goreportcard.com/badge/github.com/prashanthpai/sqscat)](https://goreportcard.com/report/github.com/prashanthpai/sqscat)
 [![MIT license](https://img.shields.io/badge/license-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
 
 sqscat is "netcat for SQS". You can use sqscat to receive from and send
@@ -17,7 +17,7 @@ sqscat is inspired by [kafkacat](https://github.com/edenhill/kafkacat).
 ### Install
 
 You can download built binaries for Mac, Linux and Windows from the
-[releases](https://github.com/ppai-plivo/sqscat/releases) page.
+[releases](https://github.com/prashanthpai/sqscat/releases) page.
 
 ### Usage
 
